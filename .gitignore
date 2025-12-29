@@ -44,4 +44,5 @@ storage/
 *.crt
 
 # Google / Firebase / Cloud Keys
-*.json
+
+dating-app-drive-storage-b4c955288c63.json
