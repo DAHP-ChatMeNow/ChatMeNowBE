@@ -1,0 +1,47 @@
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+logs/*
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist
+build
+.cache
+.temp
+
+# IDE
+.vscode/
+.idea/
+
+# Uploads
+uploads/
+storage/
+
+# Git
+.git-credentials
+*.pem
+*.key
+*.crt
+
+# Google / Firebase / Cloud Keys
+*.json
