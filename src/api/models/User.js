@@ -16,8 +16,10 @@ const UserSchema = new Schema({
   lastSeen: { type: Date, default: Date.now },
 
   friends: [{ type: Schema.Types.ObjectId, ref: "User" }]
-}, { timestamps: true });
+}, { 
+  timestamps: true
+});
 
-UserSchema.index({ displayName: "text" });
+UserSchema.index({ displayName: "text" }, { language_override: 'none' });
 
 module.exports = mongoose.model("User", UserSchema);

@@ -33,3 +33,15 @@ exports.markAllAsRead = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+exports.deleteNotification = async (req, res) => {
+    try {
+        await Notification.findOneAndDelete({
+            _id: req.params.id,
+            recipientId: req.user.userId
+        });
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};

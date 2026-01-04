@@ -1,4 +1,6 @@
 const Post = require("../models/Post");
+const Comment = require("../models/Comment");
+const Notification = require("../models/Notification");
 
 
 exports.getNewsFeed = async (req, res) => {
@@ -87,6 +89,25 @@ exports.toggleLikePost = async (req, res) => {
       
       res.status(200).json({ message: "Liked" });
     }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.unlikePost = async (req, res) => {
+  try {
+    const postId = req.params.id;
+    const userId = req.user.userId;
+
+    const post = await Post.findById(postId);
+    if (!post) return res.status(404).json({ message: "Bài viết không tồn tại" });
+
+    await Post.findByIdAndUpdate(postId, {
+      $pull: { likes: userId },
+      $inc: { likesCount: -1 }
+    });
+
+    res.status(200).json({ success: true, message: "Unliked" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

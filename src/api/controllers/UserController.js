@@ -41,27 +41,124 @@ exports.getUserProfile = async (req, res) => {
 
 exports.updateProfile = async (req, res) => {
   try {
-    const { displayName, bio, avatar, coverImage } = req.body;
+    const { displayName, bio, language, themeColor } = req.body;
+    
+    if (displayName && displayName.trim().length < 2) {
+      return res.status(400).json({ message: "Tên hiển thị phải có ít nhất 2 ký tự" });
+    }
+
+    const updateData = {};
+    if (displayName !== undefined) updateData.displayName = displayName.trim();
+    if (bio !== undefined) updateData.bio = bio;
+    if (language !== undefined) updateData.language = language;
+    if (themeColor !== undefined) updateData.themeColor = themeColor;
     
     const updatedUser = await User.findByIdAndUpdate(
       req.user.userId,
-      { displayName, bio, avatar, coverImage },
-      { new: true } 
-    );
+      updateData,
+      { new: true, runValidators: true }
+    ).select("-__v");
 
-    res.status(200).json(updatedUser);
+    if (!updatedUser) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật thông tin thành công",
+      user: updatedUser
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.log("❌ Lỗi cập nhật profile:", error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: error.message });
+    }
+    
+    res.status(500).json({ message: "Lỗi server: " + error.message });
+  }
+};
+
+exports.updateAvatar = async (req, res) => {
+  try {
+    const { avatar } = req.body;
+
+    if (!avatar) {
+      return res.status(400).json({ message: "Vui lòng cung cấp URL avatar" });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.userId,
+      { avatar },
+      { new: true, runValidators: true }
+    ).select("-__v");
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật avatar thành công",
+      user: updatedUser
+    });
+  } catch (error) {
+    console.log("❌ Lỗi cập nhật avatar:", error);
+    res.status(500).json({ message: "Lỗi server: " + error.message });
+  }
+};
+
+exports.updateCoverImage = async (req, res) => {
+  try {
+    const { coverImage } = req.body;
+
+    if (!coverImage) {
+      return res.status(400).json({ message: "Vui lòng cung cấp URL ảnh bìa" });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.userId,
+      { coverImage },
+      { new: true, runValidators: true }
+    ).select("-__v");
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật ảnh bìa thành công",
+      user: updatedUser
+    });
+  } catch (error) {
+    console.log("❌ Lỗi cập nhật ảnh bìa:", error);
+    res.status(500).json({ message: "Lỗi server: " + error.message });
   }
 };
 
 
 
 
+exports.getContacts = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId)
+      .populate("friends", "displayName avatar bio isOnline lastSeen");
+    
+    if (!user) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    res.status(200).json({ contacts: user.friends });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.sendFriendRequest = async (req, res) => {
   try {
     const senderId = req.user.userId;
-    const { receiverId } = req.body;
+    const receiverId = req.params.userId || req.body.receiverId;
 
     if (senderId === receiverId) return res.status(400).json({ message: "Không thể kết bạn với chính mình" });
 
@@ -146,4 +243,85 @@ exports.getPendingRequests = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
+};
+
+exports.acceptFriendRequest = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { requestId } = req.params;
+
+    const request = await FriendRequest.findById(requestId);
+    if (!request) return res.status(404).json({ message: "Lời mời không tồn tại" });
+
+    if (request.receiverId.toString() !== userId) {
+      return res.status(403).json({ message: "Bạn không có quyền xử lý lời mời này" });
+    }
+
+    request.status = "accepted";
+    await request.save();
+
+    const senderId = request.senderId;
+
+    await Promise.all([
+      User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }),
+      User.findByIdAndUpdate(senderId, { $addToSet: { friends: userId } }),
+      Notification.create({
+        recipientId: senderId,
+        senderId: userId,
+        type: "system",
+        message: "đã chấp nhận lời mời kết bạn."
+      })
+    ]);
+
+    res.status(200).json({ success: true, message: "Đã chấp nhận lời mời kết bạn" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.rejectFriendRequest = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { requestId } = req.params;
+
+    const request = await FriendRequest.findById(requestId);
+    if (!request) return res.status(404).json({ message: "Lời mời không tồn tại" });
+
+    if (request.receiverId.toString() !== userId) {
+      return res.status(403).json({ message: "Bạn không có quyền xử lý lời mời này" });
+    }
+
+    request.status = "rejected";
+    await request.save();
+
+    res.status(200).json({ success: true, message: "Đã từ chối lời mời kết bạn" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.removeFriend = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const friendId = req.params.userId;
+
+    if (userId === friendId) {
+      return res.status(400).json({ message: "Không thể xóa chính mình" });
+    }
+
+    await Promise.all([
+      User.findByIdAndUpdate(userId, { $pull: { friends: friendId } }),
+      User.findByIdAndUpdate(friendId, { $pull: { friends: userId } }),
+      FriendRequest.deleteMany({
+        $or: [
+          { senderId: userId, receiverId: friendId },
+          { senderId: friendId, receiverId: userId }
+        ]
+      })
+    ]);
+
+    res.status(200).json({ success: true, message: "Đã xóa bạn bè" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 }

@@ -14,6 +14,10 @@ exports.register = async (req, res) => {
   try {
     const { displayName, email, password } = req.body;
 
+    if (!displayName || !email || !password) {
+      return res.status(400).json({ message: "Vui lòng điền đầy đủ thông tin (displayName, email, password)" });
+    }
+
     
     const existingAccount = await Account.findOne({ email });
     if (existingAccount) {
@@ -45,11 +49,24 @@ exports.register = async (req, res) => {
     });
 
   } catch (error) {
-    
-    
-    if (error.code !== 11000) { 
-        
+    console.log("❌ LỖI CHI TIẾT:", error);
+
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0];
+      const message = field 
+        ? `Dữ liệu '${field}' đã tồn tại trong hệ thống.`
+        : "Dữ liệu đã tồn tại trong hệ thống.";
+      
+      return res.status(409).json({ 
+        message,
+        detail: error.message 
+      });
     }
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: error.message });
+    }
+    
     res.status(500).json({ message: "Lỗi server: " + error.message });
   }
 };

@@ -15,6 +15,8 @@ router.get("/:id", verifyToken, postController.getPostDetail);
 
 router.put("/:id/like", verifyToken, postController.toggleLikePost);
 
+router.delete("/:id/like", verifyToken, postController.unlikePost);
+
 
 
 router.get("/:postId/comments", verifyToken, postController.getComments);
