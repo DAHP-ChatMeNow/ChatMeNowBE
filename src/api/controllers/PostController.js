@@ -13,7 +13,13 @@ exports.getNewsFeed = async (req, res) => {
       .limit(parseInt(limit))
       .populate("authorId", "displayName avatar"); 
 
-    res.status(200).json(posts);
+    res.status(200).json({
+      success: true,
+      posts,
+      total: posts.length,
+      page: Number(page),
+      limit: Number(limit)
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -121,7 +127,11 @@ exports.getComments = async (req, res) => {
       .sort({ createdAt: 1 }) 
       .populate("userId", "displayName avatar");
       
-    res.status(200).json(comments);
+    res.status(200).json({
+      success: true,
+      comments,
+      total: comments.length
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -1,26 +1,81 @@
 const User = require("../models/User");
 const FriendRequest = require("../models/FriendRequest");
 const Notification = require("../models/Notification");
-
+const Account = require("../models/Account");
+const Conversation = require("../models/Conversation");
 
 exports.searchUsers = async (req, res) => {
   try {
-    const { q } = req.query; 
-    if (!q) return res.status(400).json({ message: "Vui lòng nhập từ khóa" });
+    const { q, query } = req.query;
+    const keyword = (q ?? query ?? "").trim();
 
-    
+    if (!keyword) {
+      return res.status(400).json({ message: "Vui lòng nhập từ khóa tìm kiếm" });
+    }
+
+    // 1️⃣ Tìm account theo email / phone
+    const accountsByContact = await Account.find({
+      $or: [
+        { phoneNumber: { $regex: keyword, $options: "i" } },
+        { email: { $regex: keyword, $options: "i" } }
+      ]
+    }).select("_id");
+
+    const accountIds = accountsByContact.map(acc => acc._id);
+
+    // 2️⃣ Tìm user
     const users = await User.find({
-      displayName: { $regex: q, $options: "i" },
+      $or: [
+        { displayName: { $regex: keyword, $options: "i" } },
+        { accountId: { $in: accountIds } }
+      ],
       _id: { $ne: req.user.userId }
     })
-    .select("displayName avatar bio") 
-    .limit(10);
+      .populate("accountId", "phoneNumber email")
+      .select("displayName avatar bio accountId")
+      .limit(20);
 
-    res.status(200).json(users);
+    // 3️⃣ Lấy currentUser 1 lần
+    const currentUser = await User.findById(req.user.userId).select("friends");
+
+    // 4️⃣ Gắn trạng thái bạn bè
+    const usersWithFriendStatus = await Promise.all(
+      users.map(async (user) => {
+        const isFriend = currentUser.friends.includes(user._id);
+
+        const pendingRequest = await FriendRequest.findOne({
+          $or: [
+            { sender: req.user.userId, receiver: user._id, status: "pending" },
+            { sender: user._id, receiver: req.user.userId, status: "pending" }
+          ]
+        });
+
+        return {
+          _id: user._id,
+          displayName: user.displayName,
+          avatar: user.avatar,
+          bio: user.bio,
+          phoneNumber: user.accountId?.phoneNumber || "",
+          email: user.accountId?.email || "",
+          isFriend,
+          hasPendingRequest: !!pendingRequest,
+          requestSentByMe: pendingRequest?.sender?.toString() === req.user.userId
+        };
+      })
+    );
+
+    // ✅ 5️⃣ RESPONSE CHUẨN
+    res.status(200).json({
+      success: true,
+      users: usersWithFriendStatus,
+      total: usersWithFriendStatus.length
+    });
+
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
+
 
 
 exports.getUserProfile = async (req, res) => {
@@ -142,14 +197,19 @@ exports.updateCoverImage = async (req, res) => {
 
 exports.getContacts = async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId)
+     const { userId } = req.params;
+    const user = await User.findById(userId)
       .populate("friends", "displayName avatar bio isOnline lastSeen");
     
     if (!user) {
       return res.status(404).json({ message: "Không tìm thấy người dùng" });
     }
 
-    res.status(200).json({ contacts: user.friends });
+    res.status(200).json({ 
+      success: true,
+      friends: user.friends,
+      total: user.friends.length
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -162,14 +222,31 @@ exports.sendFriendRequest = async (req, res) => {
 
     if (senderId === receiverId) return res.status(400).json({ message: "Không thể kết bạn với chính mình" });
 
-    
+    // Kiểm tra xem người nhận có tồn tại không
+    const receiver = await User.findById(receiverId);
+    if (!receiver) return res.status(404).json({ message: "Người dùng không tồn tại" });
+
+    // Kiểm tra xem đã là bạn bè chưa
+    const sender = await User.findById(senderId);
+    if (sender.friends.includes(receiverId)) {
+      return res.status(400).json({ message: "Đã là bạn bè rồi" });
+    }
+
+    // Kiểm tra xem đã có lời mời pending chưa
     const existingRequest = await FriendRequest.findOne({
-      senderId,
-      receiverId,
-      status: "pending"
+      $or: [
+        { senderId, receiverId, status: "pending" },
+        { senderId: receiverId, receiverId: senderId, status: "pending" }
+      ]
     });
 
-    if (existingRequest) return res.status(400).json({ message: "Đã gửi lời mời trước đó" });
+    if (existingRequest) {
+      if (existingRequest.senderId.toString() === senderId) {
+        return res.status(400).json({ message: "Đã gửi lời mời trước đó" });
+      } else {
+        return res.status(400).json({ message: "Người này đã gửi lời mời kết bạn cho bạn" });
+      }
+    }
 
     
     const newRequest = await FriendRequest.create({ senderId, receiverId });
@@ -183,7 +260,157 @@ exports.sendFriendRequest = async (req, res) => {
       message: "đã gửi cho bạn lời mời kết bạn."
     });
 
-    res.status(201).json({ message: "Đã gửi lời mời", request: newRequest });
+    res.status(201).json({ 
+      success: true,
+      message: "Đã gửi lời mời kết bạn", 
+      request: newRequest 
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// API tìm kiếm và gửi lời mời kết bạn thông qua email, SĐT hoặc tên
+exports.searchAndAddFriend = async (req, res) => {
+  try {
+    const { searchQuery } = req.body;
+    const senderId = req.user.userId;
+
+    if (!searchQuery) {
+      return res.status(400).json({ message: "Vui lòng nhập email, số điện thoại hoặc tên người dùng" });
+    }
+
+    // Tìm kiếm theo email hoặc số điện thoại trong Account
+    const accountsByContact = await Account.find({
+      $or: [
+        { email: searchQuery.toLowerCase().trim() },
+        { phoneNumber: searchQuery.trim() }
+      ]
+    }).select("_id");
+
+    const accountIds = accountsByContact.map(acc => acc._id);
+
+    // Tìm kiếm người dùng theo tên chính xác hoặc theo accountId
+    const users = await User.find({
+      $or: [
+        { displayName: { $regex: `^${searchQuery.trim()}$`, $options: "i" } },
+        { accountId: { $in: accountIds } }
+      ],
+      _id: { $ne: senderId }
+    })
+    .populate("accountId", "phoneNumber email")
+    .select("displayName avatar bio accountId");
+
+    if (users.length === 0) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    // Nếu tìm thấy nhiều kết quả, trả về danh sách để người dùng chọn
+    if (users.length > 1) {
+      const usersWithStatus = await Promise.all(
+        users.map(async (user) => {
+          const sender = await User.findById(senderId);
+          const isFriend = sender.friends.includes(user._id);
+          
+          const pendingRequest = await FriendRequest.findOne({
+            $or: [
+              { senderId, receiverId: user._id, status: "pending" },
+              { senderId: user._id, receiverId: senderId, status: "pending" }
+            ]
+          });
+
+          return {
+            _id: user._id,
+            displayName: user.displayName,
+            avatar: user.avatar,
+            bio: user.bio,
+            phoneNumber: user.accountId?.phoneNumber || "",
+            email: user.accountId?.email || "",
+            isFriend,
+            hasPendingRequest: !!pendingRequest
+          };
+        })
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Tìm thấy nhiều kết quả",
+        multiple: true,
+        users: usersWithStatus,
+        total: usersWithStatus.length
+      });
+    }
+
+    // Nếu chỉ có 1 kết quả, tự động gửi lời mời kết bạn
+    const receiverId = users[0]._id;
+
+    // Kiểm tra đã là bạn bè chưa
+    const sender = await User.findById(senderId);
+    if (sender.friends.includes(receiverId)) {
+      return res.status(400).json({ 
+        message: "Đã là bạn bè rồi",
+        user: {
+          _id: users[0]._id,
+          displayName: users[0].displayName,
+          avatar: users[0].avatar
+        }
+      });
+    }
+
+    // Kiểm tra lời mời pending
+    const existingRequest = await FriendRequest.findOne({
+      $or: [
+        { senderId, receiverId, status: "pending" },
+        { senderId: receiverId, receiverId: senderId, status: "pending" }
+      ]
+    });
+
+    if (existingRequest) {
+      if (existingRequest.senderId.toString() === senderId) {
+        return res.status(400).json({ 
+          message: "Đã gửi lời mời cho người này trước đó",
+          user: {
+            _id: users[0]._id,
+            displayName: users[0].displayName,
+            avatar: users[0].avatar
+          }
+        });
+      } else {
+        return res.status(400).json({ 
+          message: "Người này đã gửi lời mời kết bạn cho bạn. Vui lòng kiểm tra lời mời kết bạn",
+          user: {
+            _id: users[0]._id,
+            displayName: users[0].displayName,
+            avatar: users[0].avatar
+          }
+        });
+      }
+    }
+
+    // Tạo lời mời kết bạn mới
+    const newRequest = await FriendRequest.create({ senderId, receiverId });
+
+    // Tạo thông báo
+    await Notification.create({
+      recipientId: receiverId,
+      senderId: senderId,
+      type: "friend_request",
+      referenceId: newRequest._id,
+      message: "đã gửi cho bạn lời mời kết bạn."
+    });
+
+    res.status(201).json({ 
+      success: true,
+      message: "Đã tìm thấy và gửi lời mời kết bạn thành công",
+      user: {
+        _id: users[0]._id,
+        displayName: users[0].displayName,
+        avatar: users[0].avatar,
+        phoneNumber: users[0].accountId?.phoneNumber || "",
+        email: users[0].accountId?.email || ""
+      },
+      request: newRequest
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -212,6 +439,22 @@ exports.respondFriendRequest = async (req, res) => {
       
       const senderId = request.senderId;
 
+      // Tạo conversation nếu chưa tồn tại
+      const existingConv = await Conversation.findOne({
+        type: "private",
+        "members.userId": { $all: [userId, senderId] }
+      });
+
+      const conversationPromise = existingConv 
+        ? Promise.resolve(existingConv)
+        : Conversation.create({
+            type: "private",
+            members: [
+              { userId, role: "member" },
+              { userId: senderId, role: "member" }
+            ]
+          });
+
       await Promise.all([
         User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }), 
         User.findByIdAndUpdate(senderId, { $addToSet: { friends: userId } }),
@@ -222,7 +465,8 @@ exports.respondFriendRequest = async (req, res) => {
           senderId: userId,
           type: "system",
           message: "đã chấp nhận lời mời kết bạn."
-        })
+        }),
+        conversationPromise
       ]);
     }
 
@@ -239,7 +483,11 @@ exports.getPendingRequests = async (req, res) => {
             status: "pending"
         }).populate("senderId", "displayName avatar"); 
 
-        res.status(200).json(requests);
+        res.status(200).json({
+          success: true,
+          requests: requests,
+          total: requests.length
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -262,6 +510,22 @@ exports.acceptFriendRequest = async (req, res) => {
 
     const senderId = request.senderId;
 
+    // Tạo conversation nếu chưa tồn tại
+    const existingConv = await Conversation.findOne({
+      type: "private",
+      "members.userId": { $all: [userId, senderId] }
+    });
+
+    const conversationPromise = existingConv 
+      ? Promise.resolve(existingConv)
+      : Conversation.create({
+          type: "private",
+          members: [
+            { userId, role: "member" },
+            { userId: senderId, role: "member" }
+          ]
+        });
+
     await Promise.all([
       User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }),
       User.findByIdAndUpdate(senderId, { $addToSet: { friends: userId } }),
@@ -270,7 +534,8 @@ exports.acceptFriendRequest = async (req, res) => {
         senderId: userId,
         type: "system",
         message: "đã chấp nhận lời mời kết bạn."
-      })
+      }),
+      conversationPromise
     ]);
 
     res.status(200).json({ success: true, message: "Đã chấp nhận lời mời kết bạn" });
@@ -324,4 +589,62 @@ exports.removeFriend = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
-}
+};
+
+// Lấy thông tin email và số điện thoại từ accountId của user
+exports.getUserEmail = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    console.log("🔍 Lấy email và SĐT cho userId:", userId);
+    const user = await User.findById(userId)
+      .populate("accountId", "email phoneNumber")
+      .select("accountId displayName");
+
+    if (!user) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    if (!user.accountId) {
+      return res.status(404).json({ message: "Không tìm thấy thông tin tài khoản" });
+    }
+
+    res.status(200).json({
+      success: true,
+      email: user.accountId.email || "",
+      phoneNumber: user.accountId.phoneNumber || "",
+      displayName: user.displayName
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Lấy email của user cụ thể theo userId
+exports.getUserEmailById = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log("🔍 Lấy email cho userId:", userId);
+    const user = await User.findById(userId)
+      .populate("accountId", "email phoneNumber")
+      .select("accountId displayName avatar");
+
+    if (!user) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    if (!user.accountId) {
+      return res.status(404).json({ message: "Không tìm thấy thông tin tài khoản" });
+    }
+
+    res.status(200).json({
+      success: true,
+      _id: user._id,
+      displayName: user.displayName,
+      avatar: user.avatar,
+      email: user.accountId.email || "",
+      phoneNumber: user.accountId.phoneNumber || ""
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

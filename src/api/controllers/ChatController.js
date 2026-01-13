@@ -5,8 +5,8 @@ const User = require("../models/User");
 
 exports.getConversations = async (req, res) => {
   try {
-    const userId = req.user.userId;
 
+    const userId = req.user.userId;
     
     const conversations = await Conversation.find({
       "members.userId": userId
@@ -14,7 +14,11 @@ exports.getConversations = async (req, res) => {
     .sort({ updatedAt: -1 }) 
     .populate("members.userId", "displayName avatar isOnline"); 
 
-    res.status(200).json(conversations);
+    res.status(200).json({
+      success: true,
+      conversations,
+      total: conversations.length
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -41,8 +45,12 @@ exports.getMessages = async (req, res) => {
       .limit(parseInt(limit))
       .populate("senderId", "displayName avatar");
 
-    
-    res.status(200).json(messages.reverse());
+    const ordered = messages.reverse();
+    res.status(200).json({
+      success: true,
+      messages: ordered,
+      total: ordered.length
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

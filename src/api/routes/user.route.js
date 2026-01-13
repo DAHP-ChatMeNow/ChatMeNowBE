@@ -3,9 +3,15 @@ const router = express.Router();
 const userController = require('../controllers/UserController')
 const { verifyToken } = require("../middleware/authMiddleware");
 
+router.get("/:userId/contacts", verifyToken, userController.getContacts);
 
 router.get("/search", verifyToken, userController.searchUsers);
 
+// Lấy email và SĐT của user hiện tại
+router.get("/me/email", verifyToken, userController.getUserEmail);
+
+// Lấy email của user cụ thể theo userId
+router.get("/:userId/email", verifyToken, userController.getUserEmailById);
 
 router.get("/:id", verifyToken, userController.getUserProfile);
 
@@ -18,9 +24,11 @@ router.put("/cover-image", verifyToken, userController.updateCoverImage);
 
 
 // Friend management endpoints
-router.get("/contacts", verifyToken, userController.getContacts);
 
 router.get("/friend-requests/pending", verifyToken, userController.getPendingRequests);
+
+// Tìm kiếm và gửi lời mời kết bạn qua email/SĐT/tên
+router.post("/search-and-add", verifyToken, userController.searchAndAddFriend);
 
 router.post("/friend-requests/:userId", verifyToken, userController.sendFriendRequest);
 

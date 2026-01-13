@@ -7,7 +7,11 @@ exports.getNotifications = async (req, res) => {
       .limit(20)
       .populate("senderId", "displayName avatar");
 
-    res.status(200).json(notis);
+    res.status(200).json({
+      success: true,
+      notifications: notis,
+      total: notis.length
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

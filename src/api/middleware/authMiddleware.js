@@ -19,6 +19,7 @@ exports.authMiddleware = (req, res, next) => {
         accountId: decoded.accountId, 
         userId: decoded.userId 
     };
+    console.log("Authenticated user:", req.user);
 
     next();
   } catch (error) {
