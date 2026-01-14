@@ -7,7 +7,6 @@ const ConversationSchema = new Schema({
   
   name: { type: String }, 
   groupAvatar: { type: String },
-  adminId: { type: Schema.Types.ObjectId, ref: "User" },
 
   members: [{
     userId: { type: Schema.Types.ObjectId, ref: "User" },
@@ -18,11 +17,11 @@ const ConversationSchema = new Schema({
 
   
   lastMessage: {
-    content: String,
-    senderId: { type: Schema.Types.ObjectId, ref: "User" },
-    senderName: String,
-    type: String,
-    createdAt: Date
+    content: { type: String, default: null },
+    senderId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    senderName: { type: String, default: null },
+    type: { type: String, default: "text" },
+    createdAt: { type: Date, default: null }
   }
 }, { timestamps: true });
 

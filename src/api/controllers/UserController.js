@@ -80,15 +80,38 @@ exports.searchUsers = async (req, res) => {
 
 exports.getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
-      .populate("friends", "displayName avatar"); 
+    const { userId } = req.params;
     
-    if (!user) return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    // Validate ObjectId format
+    if (!userId || !userId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "User ID không hợp lệ" });
+    }
 
+    const user = await User.findById(userId)
+      .populate("friends", "displayName avatar")
+      .select("-__v"); // Loại bỏ __v field
     
-    
-    res.status(200).json(user);
+    if (!user) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+
+    // Response với format chuẩn
+    res.status(200).json({
+      success: true,
+      user: {
+        _id: user._id,
+        displayName: user.displayName,
+        avatar: user.avatar,
+        bio: user.bio,
+        isOnline: user.isOnline,
+        lastSeen: user.lastSeen,
+        coverImage: user.coverImage,
+        friends: user.friends,
+        createdAt: user.createdAt
+      }
+    });
   } catch (error) {
+    console.error("❌ Lỗi getUserProfile:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -447,13 +470,19 @@ exports.respondFriendRequest = async (req, res) => {
 
       const conversationPromise = existingConv 
         ? Promise.resolve(existingConv)
-        : Conversation.create({
-            type: "private",
-            members: [
-              { userId, role: "member" },
-              { userId: senderId, role: "member" }
-            ]
-          });
+        : (async () => {
+            // Lấy thông tin của sender để gán làm groupAvatar và name
+            const senderUser = await User.findById(senderId).select("displayName avatar");
+            return Conversation.create({
+              type: "private",
+              name: senderUser.displayName,
+              groupAvatar: senderUser.avatar,
+              members: [
+                { userId, role: "member" },
+                { userId: senderId, role: "member" }
+              ]
+            });
+          })();
 
       await Promise.all([
         User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }), 
@@ -492,39 +521,25 @@ exports.getPendingRequests = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-
 exports.acceptFriendRequest = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { requestId } = req.params;
 
     const request = await FriendRequest.findById(requestId);
-    if (!request) return res.status(404).json({ message: "Lời mời không tồn tại" });
+    if (!request)
+      return res.status(404).json({ message: "Lời mời không tồn tại" });
 
-    if (request.receiverId.toString() !== userId) {
-      return res.status(403).json({ message: "Bạn không có quyền xử lý lời mời này" });
-    }
+    if (request.receiverId.toString() !== userId)
+      return res.status(403).json({ message: "Không có quyền xử lý" });
+
+    if (request.status === "accepted")
+      return res.status(400).json({ message: "Lời mời đã được chấp nhận" });
 
     request.status = "accepted";
     await request.save();
 
     const senderId = request.senderId;
-
-    // Tạo conversation nếu chưa tồn tại
-    const existingConv = await Conversation.findOne({
-      type: "private",
-      "members.userId": { $all: [userId, senderId] }
-    });
-
-    const conversationPromise = existingConv 
-      ? Promise.resolve(existingConv)
-      : Conversation.create({
-          type: "private",
-          members: [
-            { userId, role: "member" },
-            { userId: senderId, role: "member" }
-          ]
-        });
 
     await Promise.all([
       User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }),
@@ -534,15 +549,15 @@ exports.acceptFriendRequest = async (req, res) => {
         senderId: userId,
         type: "system",
         message: "đã chấp nhận lời mời kết bạn."
-      }),
-      conversationPromise
+      })
     ]);
 
-    res.status(200).json({ success: true, message: "Đã chấp nhận lời mời kết bạn" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
+
 
 exports.rejectFriendRequest = async (req, res) => {
   try {

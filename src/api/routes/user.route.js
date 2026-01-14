@@ -13,7 +13,8 @@ router.get("/me/email", verifyToken, userController.getUserEmail);
 // Lấy email của user cụ thể theo userId
 router.get("/:userId/email", verifyToken, userController.getUserEmailById);
 
-router.get("/:id", verifyToken, userController.getUserProfile);
+// Lấy thông tin profile của user (displayName, avatar, bio, isOnline, friends)
+router.get("/:userId", verifyToken, userController.getUserProfile);
 
 router.put("/profile", verifyToken, userController.updateProfile);
 
