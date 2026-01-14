@@ -279,7 +279,7 @@ exports.sendFriendRequest = async (req, res) => {
       recipientId: receiverId,
       senderId: senderId,
       type: "friend_request",
-      referenceId: newRequest._id,
+      referenced: newRequest._id,
       message: "đã gửi cho bạn lời mời kết bạn."
     });
 
@@ -418,7 +418,7 @@ exports.searchAndAddFriend = async (req, res) => {
       recipientId: receiverId,
       senderId: senderId,
       type: "friend_request",
-      referenceId: newRequest._id,
+      referenced: newRequest._id,
       message: "đã gửi cho bạn lời mời kết bạn."
     });
 

@@ -5,7 +5,8 @@ exports.getNotifications = async (req, res) => {
     const notis = await Notification.find({ recipientId: req.user.userId })
       .sort({ createdAt: -1 }) 
       .limit(20)
-      .populate("senderId", "displayName avatar");
+      .populate("senderId", "displayName avatar")
+      .populate("referenced");
 
     res.status(200).json({
       success: true,

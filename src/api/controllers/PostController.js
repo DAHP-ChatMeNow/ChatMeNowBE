@@ -6,6 +6,7 @@ const Notification = require("../models/Notification");
 exports.getNewsFeed = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
+    const userId = req.user.userId;
     
     const posts = await Post.find({ privacy: "public" }) 
       .sort({ createdAt: -1 }) 
@@ -13,9 +14,15 @@ exports.getNewsFeed = async (req, res) => {
       .limit(parseInt(limit))
       .populate("authorId", "displayName avatar"); 
 
+    // Add isLikedByCurrentUser flag for each post
+    const postsWithLikeStatus = posts.map(post => ({
+      ...post.toObject(),
+      isLikedByCurrentUser: post.likes && post.likes.includes(userId)
+    }));
+
     res.status(200).json({
       success: true,
-      posts,
+      posts: postsWithLikeStatus,
       total: posts.length,
       page: Number(page),
       limit: Number(limit)
@@ -37,7 +44,8 @@ exports.createPost = async (req, res) => {
       privacy
     });
 
-    res.status(201).json(newPost);
+    const populatedPost = await newPost.populate("authorId", "displayName avatar");
+    res.status(201).json(populatedPost);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -64,36 +72,27 @@ exports.toggleLikePost = async (req, res) => {
     const post = await Post.findById(postId);
     if (!post) return res.status(404).json({ message: "Bài viết không tồn tại" });
 
-    
-    
     const isLiked = post.likes && post.likes.includes(userId);
 
     if (isLiked) {
-      
-      await Post.findByIdAndUpdate(postId, {
-        $pull: { likes: userId },
-        $inc: { likesCount: -1 }
-      });
-      res.status(200).json({ message: "Unliked" });
+      return res.status(400).json({ message: "Bạn đã thích bài viết này rồi" });
     } else {
-      
       await Post.findByIdAndUpdate(postId, {
         $addToSet: { likes: userId },
         $inc: { likesCount: 1 }
-      });
+      }, { new: true }).populate("authorId", "displayName avatar");
 
-      
       if (post.authorId.toString() !== userId) {
         await Notification.create({
           recipientId: post.authorId,
           senderId: userId,
           type: "like_post",
-          referenceId: postId,
+          referenced: postId,
           message: "đã thích bài viết của bạn."
         });
       }
       
-      res.status(200).json({ message: "Liked" });
+      res.status(200).json({ message: "Liked", isLikedByCurrentUser: true });
     }
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -102,23 +101,11 @@ exports.toggleLikePost = async (req, res) => {
 
 exports.unlikePost = async (req, res) => {
   try {
-    const postId = req.params.id;
-    const userId = req.user.userId;
-
-    const post = await Post.findById(postId);
-    if (!post) return res.status(404).json({ message: "Bài viết không tồn tại" });
-
-    await Post.findByIdAndUpdate(postId, {
-      $pull: { likes: userId },
-      $inc: { likesCount: -1 }
-    });
-
-    res.status(200).json({ success: true, message: "Unliked" });
+    res.status(403).json({ message: "Bạn không thể bỏ like bài viết" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
-
 
 exports.getComments = async (req, res) => {
   try {

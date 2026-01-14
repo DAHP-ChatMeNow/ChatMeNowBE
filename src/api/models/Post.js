@@ -12,7 +12,7 @@ const PostSchema = new Schema({
     duration: Number 
   }],
 
-  
+  likes: [{ type: Schema.Types.ObjectId, ref: "User" }], // Array of user IDs who liked this post
   likesCount: { type: Number, default: 0 },
   commentsCount: { type: Number, default: 0 },
   trendingScore: { type: Number, default: 0 }, 
