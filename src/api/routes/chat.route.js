@@ -24,4 +24,13 @@ router.get("/conversations/:conversationId/messages", verifyToken, chatControlle
 // Gửi message
 router.post("/messages", verifyToken, chatController.sendMessage);
 
+// Nhóm: thêm thành viên
+router.post("/conversations/:conversationId/members", verifyToken, chatController.addMemberToGroup);
+
+// Nhóm: xóa thành viên
+router.delete("/conversations/:conversationId/members/:memberId", verifyToken, chatController.removeMemberFromGroup);
+
+// Nhóm: giải tán
+router.delete("/conversations/:conversationId", verifyToken, chatController.dissolveGroup);
+
 module.exports = router;
