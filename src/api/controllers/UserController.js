@@ -589,6 +589,7 @@ exports.removeFriend = async (req, res) => {
       return res.status(400).json({ message: "Không thể xóa chính mình" });
     }
 
+    // Xóa quan hệ bạn bè + lời mời kết bạn
     await Promise.all([
       User.findByIdAndUpdate(userId, { $pull: { friends: friendId } }),
       User.findByIdAndUpdate(friendId, { $pull: { friends: userId } }),
@@ -600,7 +601,22 @@ exports.removeFriend = async (req, res) => {
       })
     ]);
 
-    res.status(200).json({ success: true, message: "Đã xóa bạn bè" });
+    // Tìm các cuộc trò chuyện riêng tư giữa 2 người và xóa kèm tin nhắn
+    const privateConversations = await Conversation.find({
+      type: "private",
+      "members.userId": { $all: [userId, friendId] }
+    }).select("_id");
+
+    if (privateConversations.length > 0) {
+      const convIds = privateConversations.map(c => c._id);
+      const Message = require("../models/Message");
+      await Promise.all([
+        Message.deleteMany({ conversationId: { $in: convIds } }),
+        Conversation.deleteMany({ _id: { $in: convIds } })
+      ]);
+    }
+
+    res.status(200).json({ success: true, message: "Đã xóa bạn bè và hội thoại riêng tư" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

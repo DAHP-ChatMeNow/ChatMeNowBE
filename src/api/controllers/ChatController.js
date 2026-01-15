@@ -199,3 +199,138 @@ exports.getPrivateConversationPartner = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Thêm thành viên vào nhóm
+exports.addMemberToGroup = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { conversationId } = req.params;
+    const { memberIds } = req.body;
+
+    // Kiểm tra nhóm tồn tại
+    const group = await Conversation.findById(conversationId);
+    if (!group) {
+      return res.status(404).json({ message: "Không tìm thấy nhóm" });
+    }
+
+    if (group.type !== "group") {
+      return res.status(400).json({ message: "Chỉ áp dụng cho nhóm" });
+    }
+
+    // Kiểm tra user có phải admin không
+    const userMember = group.members.find(m => m.userId.toString() === userId);
+    if (!userMember || userMember.role !== "admin") {
+      return res.status(403).json({ message: "Chỉ admin mới có thể thêm thành viên" });
+    }
+
+    // Thêm các thành viên mới
+    const newMembers = memberIds.filter(id => 
+      !group.members.some(m => m.userId.toString() === id)
+    );
+
+    if (newMembers.length === 0) {
+      return res.status(400).json({ message: "Tất cả người dùng đã là thành viên" });
+    }
+
+    for (const memberId of newMembers) {
+      group.members.push({ userId: memberId, role: "member" });
+    }
+
+    const updated = await group.save();
+    await updated.populate("members.userId", "displayName avatar isOnline");
+
+    // Tạo notification cho các thành viên mới
+    const Notification = require("../models/Notification");
+    const user = await User.findById(userId).select("displayName");
+    for (const memberId of newMembers) {
+      await Notification.create({
+        recipientId: memberId,
+        senderId: userId,
+        type: "group_invite",
+        referenced: conversationId,
+        message: `đã mời bạn vào nhóm "${group.name}".`
+      });
+    }
+
+    res.status(200).json({ success: true, conversation: updated });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Xóa thành viên khỏi nhóm
+exports.removeMemberFromGroup = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { conversationId, memberId } = req.params;
+
+    // Kiểm tra nhóm tồn tại
+    const group = await Conversation.findById(conversationId);
+    if (!group) {
+      return res.status(404).json({ message: "Không tìm thấy nhóm" });
+    }
+
+    if (group.type !== "group") {
+      return res.status(400).json({ message: "Chỉ áp dụng cho nhóm" });
+    }
+
+    // Kiểm tra user có phải admin không
+    const userMember = group.members.find(m => m.userId.toString() === userId);
+    if (!userMember || userMember.role !== "admin") {
+      return res.status(403).json({ message: "Chỉ admin mới có thể xóa thành viên" });
+    }
+
+    // Không cho xóa admin
+    const memberToRemove = group.members.find(m => m.userId.toString() === memberId);
+    if (!memberToRemove) {
+      return res.status(404).json({ message: "Thành viên không tìm thấy" });
+    }
+
+    if (memberToRemove.role === "admin") {
+      return res.status(400).json({ message: "Không thể xóa admin" });
+    }
+
+    // Xóa thành viên
+    group.members = group.members.filter(m => m.userId.toString() !== memberId);
+    const updated = await group.save();
+    await updated.populate("members.userId", "displayName avatar isOnline");
+
+    res.status(200).json({ success: true, conversation: updated });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Giải tán nhóm (chỉ admin)
+exports.dissolveGroup = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { conversationId } = req.params;
+
+    // Kiểm tra nhóm tồn tại
+    const group = await Conversation.findById(conversationId);
+    if (!group) {
+      return res.status(404).json({ message: "Không tìm thấy nhóm" });
+    }
+
+    if (group.type !== "group") {
+      return res.status(400).json({ message: "Chỉ áp dụng cho nhóm" });
+    }
+
+    // Kiểm tra user có phải admin không
+    const userMember = group.members.find(m => m.userId.toString() === userId);
+    if (!userMember || userMember.role !== "admin") {
+      return res.status(403).json({ message: "Chỉ admin mới có thể giải tán nhóm" });
+    }
+
+    // Xóa tất cả tin nhắn trong nhóm
+    await Message.deleteMany({ conversationId });
+
+    // Xóa nhóm
+    await Conversation.findByIdAndDelete(conversationId);
+
+    res.status(200).json({ success: true, message: "Đã giải tán nhóm" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
