@@ -10,5 +10,4 @@ cloudinary.config({
   secure: true,
 });
 
-console.log("Cloudinary đã được cấu hình!");
 module.exports = cloudinary;

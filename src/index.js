@@ -1,14 +1,14 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io"); 
+const { Server } = require("socket.io");
 const connectDB = require("./config/db");
 const routes = require("./api/routes/index");
-const initializeSocket = require("./service/socketHandler"); 
+const initializeSocket = require("./sockets/socket.handler");
 const cloudinary = require("./config/cloudinary");
 const cors = require("cors");
-const dotenv = require("dotenv"); 
+const dotenv = require("dotenv");
 
-dotenv.config(); 
+dotenv.config();
 connectDB();
 
 const app = express();
@@ -17,13 +17,11 @@ app.use(
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
 app.use(express.json());
 
-
 const server = http.createServer(app);
-
 
 const io = new Server(server, {
   cors: {
@@ -31,20 +29,15 @@ const io = new Server(server, {
   },
 });
 
-
-app.set("io", io); 
+app.set("io", io);
 app.set("cloudinary", cloudinary);
 
-
-initializeSocket(io); 
-
-
+initializeSocket(io);
 
 app.use("/api", routes);
 
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server đang lắng nghe trên cổng ${PORT}`);
-  console.log(`(Có thể truy cập từ localhost hoặc từ IP mạng LAN của bạn)`);
+  console.log(`Server đang lắng nghe trên cổng ${PORT}`);
 });

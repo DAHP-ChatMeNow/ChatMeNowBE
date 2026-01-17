@@ -1,0 +1,163 @@
+const Post = require("../models/post.model");
+const Comment = require("../models/comment.model");
+const Notification = require("../models/notification.model");
+const { POST_PRIVACY } = require("../../constants");
+
+class PostService {
+  /**
+   * Lấy newsfeed
+   */
+  async getNewsFeed(userId, { page = 1, limit = 10 }) {
+    const posts = await Post.find({ privacy: POST_PRIVACY.PUBLIC })
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .populate("authorId", "displayName avatar");
+
+    // Thêm flag isLikedByCurrentUser
+    const postsWithLikeStatus = posts.map((post) => ({
+      ...post.toObject(),
+      isLikedByCurrentUser: post.likes && post.likes.includes(userId),
+    }));
+
+    return {
+      posts: postsWithLikeStatus,
+      total: posts.length,
+      page: Number(page),
+      limit: Number(limit),
+    };
+  }
+
+  /**
+   * Tạo bài viết mới
+   */
+  async createPost(userId, { content, privacy }) {
+    const newPost = await Post.create({
+      authorId: userId,
+      content,
+      privacy,
+    });
+
+    const populatedPost = await newPost.populate(
+      "authorId",
+      "displayName avatar",
+    );
+    return populatedPost;
+  }
+
+  /**
+   * Lấy chi tiết bài viết
+   */
+  async getPostDetail(postId) {
+    const post = await Post.findById(postId).populate(
+      "authorId",
+      "displayName avatar",
+    );
+    return post;
+  }
+
+  /**
+   * Like bài viết
+   */
+  async toggleLikePost(userId, postId) {
+    const post = await Post.findById(postId);
+    if (!post) {
+      throw {
+        statusCode: 404,
+        message: "Bài viết không tồn tại",
+      };
+    }
+
+    const isLiked = post.likes && post.likes.includes(userId);
+
+    if (isLiked) {
+      throw {
+        statusCode: 400,
+        message: "Bạn đã thích bài viết này rồi",
+      };
+    }
+
+    await Post.findByIdAndUpdate(
+      postId,
+      {
+        $addToSet: { likes: userId },
+        $inc: { likesCount: 1 },
+      },
+      { new: true },
+    ).populate("authorId", "displayName avatar");
+
+    // Tạo notification
+    if (post.authorId.toString() !== userId) {
+      await Notification.create({
+        recipientId: post.authorId,
+        senderId: userId,
+        type: "like_post",
+        referenced: postId,
+        message: "đã thích bài viết của bạn.",
+      });
+    }
+
+    return {
+      message: "Liked",
+      isLikedByCurrentUser: true,
+    };
+  }
+
+  /**
+   * Unlike bài viết
+   */
+  async unlikePost(userId, postId) {
+    throw {
+      statusCode: 403,
+      message: "Bạn không thể bỏ like bài viết",
+    };
+  }
+
+  /**
+   * Lấy danh sách comment
+   */
+  async getComments(postId) {
+    const comments = await Comment.find({ postId })
+      .sort({ createdAt: 1 })
+      .populate("userId", "displayName avatar");
+
+    return {
+      comments,
+      total: comments.length,
+    };
+  }
+
+  /**
+   * Thêm comment
+   */
+  async addComment(userId, postId, content) {
+    const newComment = await Comment.create({
+      postId,
+      userId,
+      content,
+    });
+
+    // Tăng số lượng comment
+    const post = await Post.findByIdAndUpdate(postId, {
+      $inc: { commentsCount: 1 },
+    });
+
+    // Populate user info
+    await newComment.populate("userId", "displayName avatar");
+
+    // Tạo notification
+    if (post && post.authorId.toString() !== userId) {
+      await Notification.create({
+        recipientId: post.authorId,
+        senderId: userId,
+        type: "comment",
+        referenceId: postId,
+        message: "đã bình luận về bài viết của bạn.",
+      });
+    }
+
+    return newComment;
+  }
+}
+
+module.exports = new PostService();

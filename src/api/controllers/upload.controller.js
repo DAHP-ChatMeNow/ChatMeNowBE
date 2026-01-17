@@ -1,4 +1,3 @@
-const User = require("../../model/User");
 const {
   formatBufferToDataURI,
   uploadToCloudinary,
@@ -21,7 +20,7 @@ const uploadAvatar = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
       { $set: { "profile.photos.0": cloudinaryUrl } },
-      { new: true }
+      { new: true },
     );
     res.status(200).json(updatedUser);
   } catch (err) {
@@ -46,7 +45,7 @@ const uploadPhoto = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
       { $push: { "profile.photos": cloudinaryUrl } },
-      { new: true }
+      { new: true },
     );
 
     res.status(200).json(updatedUser);
@@ -68,14 +67,13 @@ const deletePhoto = async (req, res) => {
     const publicId = publicIdWithFormat.split(".")[0];
 
     if (publicId) {
-      console.log("Đang xóa trên Cloudinary, ID:", publicId);
       await cloudinary.uploader.destroy(publicId);
     }
 
     const updatedUser = await User.findByIdAndUpdate(
       req.user.id,
       { $pull: { "profile.photos": photoUrl } },
-      { new: true }
+      { new: true },
     );
 
     res.status(200).json(updatedUser);
