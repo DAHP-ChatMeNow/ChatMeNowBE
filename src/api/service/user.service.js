@@ -1,0 +1,705 @@
+const User = require("../models/user.model");
+const FriendRequest = require("../models/friend-request.model");
+const Notification = require("../models/notification.model");
+const Account = require("../models/account.model");
+const Conversation = require("../models/conversation.model");
+const Message = require("../models/message.model");
+const {
+  CONVERSATION_TYPES,
+  FRIEND_REQUEST_STATUS,
+} = require("../../constants");
+
+class UserService {
+  /**
+   * Tìm kiếm người dùng
+   */
+  async searchUsers(keyword, currentUserId) {
+    if (!keyword) {
+      throw {
+        statusCode: 400,
+        message: "Vui lòng nhập từ khóa tìm kiếm",
+      };
+    }
+
+    // Tìm account theo email / phone
+    const accountsByContact = await Account.find({
+      $or: [
+        { phoneNumber: { $regex: keyword, $options: "i" } },
+        { email: { $regex: keyword, $options: "i" } },
+      ],
+    }).select("_id");
+
+    const accountIds = accountsByContact.map((acc) => acc._id);
+
+    // Tìm user
+    const users = await User.find({
+      $or: [
+        { displayName: { $regex: keyword, $options: "i" } },
+        { accountId: { $in: accountIds } },
+      ],
+      _id: { $ne: currentUserId },
+    })
+      .populate("accountId", "phoneNumber email")
+      .select("displayName avatar bio accountId")
+      .limit(20);
+
+    // Lấy currentUser
+    const currentUser = await User.findById(currentUserId).select("friends");
+
+    // Gắn trạng thái bạn bè
+    const usersWithFriendStatus = await Promise.all(
+      users.map(async (user) => {
+        const isFriend = currentUser.friends.includes(user._id);
+
+        const pendingRequest = await FriendRequest.findOne({
+          $or: [
+            {
+              sender: currentUserId,
+              receiver: user._id,
+              status: FRIEND_REQUEST_STATUS.PENDING,
+            },
+            {
+              sender: user._id,
+              receiver: currentUserId,
+              status: FRIEND_REQUEST_STATUS.PENDING,
+            },
+          ],
+        });
+
+        return {
+          _id: user._id,
+          displayName: user.displayName,
+          avatar: user.avatar,
+          bio: user.bio,
+          phoneNumber: user.accountId?.phoneNumber || "",
+          email: user.accountId?.email || "",
+          isFriend,
+          hasPendingRequest: !!pendingRequest,
+          requestSentByMe: pendingRequest?.sender?.toString() === currentUserId,
+        };
+      }),
+    );
+
+    return {
+      users: usersWithFriendStatus,
+      total: usersWithFriendStatus.length,
+    };
+  }
+
+  /**
+   * Lấy thông tin profile của user
+   */
+  async getUserProfile(userId) {
+    // Validate ObjectId format
+    if (!userId || !userId.match(/^[0-9a-fA-F]{24}$/)) {
+      throw {
+        statusCode: 400,
+        message: "User ID không hợp lệ",
+      };
+    }
+
+    const user = await User.findById(userId)
+      .populate("friends", "displayName avatar")
+      .select("-__v");
+
+    if (!user) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    return {
+      _id: user._id,
+      displayName: user.displayName,
+      avatar: user.avatar,
+      bio: user.bio,
+      isOnline: user.isOnline,
+      lastSeen: user.lastSeen,
+      coverImage: user.coverImage,
+      friends: user.friends,
+      createdAt: user.createdAt,
+    };
+  }
+
+  /**
+   * Cập nhật profile
+   */
+  async updateProfile(userId, { displayName, bio, language, themeColor }) {
+    if (displayName && displayName.trim().length < 2) {
+      throw {
+        statusCode: 400,
+        message: "Tên hiển thị phải có ít nhất 2 ký tự",
+      };
+    }
+
+    const updateData = {};
+    if (displayName !== undefined) updateData.displayName = displayName.trim();
+    if (bio !== undefined) updateData.bio = bio;
+    if (language !== undefined) updateData.language = language;
+    if (themeColor !== undefined) updateData.themeColor = themeColor;
+
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+      new: true,
+      runValidators: true,
+    }).select("-__v");
+
+    if (!updatedUser) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    return updatedUser;
+  }
+
+  /**
+   * Cập nhật avatar
+   */
+  async updateAvatar(userId, avatar) {
+    if (!avatar) {
+      throw {
+        statusCode: 400,
+        message: "Vui lòng cung cấp URL avatar",
+      };
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { avatar },
+      { new: true, runValidators: true },
+    ).select("-__v");
+
+    if (!updatedUser) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    return updatedUser;
+  }
+
+  /**
+   * Cập nhật ảnh bìa
+   */
+  async updateCoverImage(userId, coverImage) {
+    if (!coverImage) {
+      throw {
+        statusCode: 400,
+        message: "Vui lòng cung cấp URL ảnh bìa",
+      };
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { coverImage },
+      { new: true, runValidators: true },
+    ).select("-__v");
+
+    if (!updatedUser) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    return updatedUser;
+  }
+
+  /**
+   * Lấy danh sách bạn bè
+   */
+  async getContacts(userId) {
+    const user = await User.findById(userId).populate(
+      "friends",
+      "displayName avatar bio isOnline lastSeen",
+    );
+
+    if (!user) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    return {
+      friends: user.friends,
+      total: user.friends.length,
+    };
+  }
+
+  /**
+   * Gửi lời mời kết bạn
+   */
+  async sendFriendRequest(senderId, receiverId) {
+    if (senderId === receiverId) {
+      throw {
+        statusCode: 400,
+        message: "Không thể kết bạn với chính mình",
+      };
+    }
+
+    // Kiểm tra người nhận có tồn tại không
+    const receiver = await User.findById(receiverId);
+    if (!receiver) {
+      throw {
+        statusCode: 404,
+        message: "Người dùng không tồn tại",
+      };
+    }
+
+    // Kiểm tra đã là bạn bè chưa
+    const sender = await User.findById(senderId);
+    if (sender.friends.includes(receiverId)) {
+      throw {
+        statusCode: 400,
+        message: "Đã là bạn bè rồi",
+      };
+    }
+
+    // Kiểm tra lời mời pending
+    const existingRequest = await FriendRequest.findOne({
+      $or: [
+        { senderId, receiverId, status: "pending" },
+        { senderId: receiverId, receiverId: senderId, status: "pending" },
+      ],
+    });
+
+    if (existingRequest) {
+      if (existingRequest.senderId.toString() === senderId) {
+        throw {
+          statusCode: 400,
+          message: "Đã gửi lời mời trước đó",
+        };
+      } else {
+        throw {
+          statusCode: 400,
+          message: "Người này đã gửi lời mời kết bạn cho bạn",
+        };
+      }
+    }
+
+    // Tạo lời mời
+    const newRequest = await FriendRequest.create({ senderId, receiverId });
+
+    // Tạo thông báo
+    await Notification.create({
+      recipientId: receiverId,
+      senderId: senderId,
+      type: "friend_request",
+      referenced: newRequest._id,
+      message: "đã gửi cho bạn lời mời kết bạn.",
+    });
+
+    return newRequest;
+  }
+
+  /**
+   * Tìm kiếm và gửi lời mời kết bạn
+   */
+  async searchAndAddFriend(senderId, searchQuery) {
+    if (!searchQuery) {
+      throw {
+        statusCode: 400,
+        message: "Vui lòng nhập email, số điện thoại hoặc tên người dùng",
+      };
+    }
+
+    // Tìm kiếm theo email hoặc số điện thoại trong Account
+    const accountsByContact = await Account.find({
+      $or: [
+        { email: searchQuery.toLowerCase().trim() },
+        { phoneNumber: searchQuery.trim() },
+      ],
+    }).select("_id");
+
+    const accountIds = accountsByContact.map((acc) => acc._id);
+
+    // Tìm kiếm người dùng
+    const users = await User.find({
+      $or: [
+        { displayName: { $regex: `^${searchQuery.trim()}$`, $options: "i" } },
+        { accountId: { $in: accountIds } },
+      ],
+      _id: { $ne: senderId },
+    })
+      .populate("accountId", "phoneNumber email")
+      .select("displayName avatar bio accountId");
+
+    if (users.length === 0) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    // Nếu tìm thấy nhiều kết quả
+    if (users.length > 1) {
+      const usersWithStatus = await Promise.all(
+        users.map(async (user) => {
+          const sender = await User.findById(senderId);
+          const isFriend = sender.friends.includes(user._id);
+
+          const pendingRequest = await FriendRequest.findOne({
+            $or: [
+              {
+                senderId,
+                receiverId: user._id,
+                status: FRIEND_REQUEST_STATUS.PENDING,
+              },
+              {
+                senderId: user._id,
+                receiverId: senderId,
+                status: FRIEND_REQUEST_STATUS.PENDING,
+              },
+            ],
+          });
+
+          return {
+            _id: user._id,
+            displayName: user.displayName,
+            avatar: user.avatar,
+            bio: user.bio,
+            phoneNumber: user.accountId?.phoneNumber || "",
+            email: user.accountId?.email || "",
+            isFriend,
+            hasPendingRequest: !!pendingRequest,
+          };
+        }),
+      );
+
+      return {
+        multiple: true,
+        users: usersWithStatus,
+        total: usersWithStatus.length,
+      };
+    }
+
+    // Chỉ có 1 kết quả - tự động gửi lời mời
+    const receiverId = users[0]._id;
+
+    // Kiểm tra đã là bạn bè chưa
+    const sender = await User.findById(senderId);
+    if (sender.friends.includes(receiverId)) {
+      throw {
+        statusCode: 400,
+        message: "Đã là bạn bè rồi",
+        user: {
+          _id: users[0]._id,
+          displayName: users[0].displayName,
+          avatar: users[0].avatar,
+        },
+      };
+    }
+
+    // Kiểm tra lời mời pending
+    const existingRequest = await FriendRequest.findOne({
+      $or: [
+        { senderId, receiverId, status: "pending" },
+        { senderId: receiverId, receiverId: senderId, status: "pending" },
+      ],
+    });
+
+    if (existingRequest) {
+      if (existingRequest.senderId.toString() === senderId) {
+        throw {
+          statusCode: 400,
+          message: "Đã gửi lời mời cho người này trước đó",
+          user: {
+            _id: users[0]._id,
+            displayName: users[0].displayName,
+            avatar: users[0].avatar,
+          },
+        };
+      } else {
+        throw {
+          statusCode: 400,
+          message:
+            "Người này đã gửi lời mời kết bạn cho bạn. Vui lòng kiểm tra lời mời kết bạn",
+          user: {
+            _id: users[0]._id,
+            displayName: users[0].displayName,
+            avatar: users[0].avatar,
+          },
+        };
+      }
+    }
+
+    // Tạo lời mời
+    const newRequest = await FriendRequest.create({ senderId, receiverId });
+
+    // Tạo thông báo
+    await Notification.create({
+      recipientId: receiverId,
+      senderId: senderId,
+      type: "friend_request",
+      referenced: newRequest._id,
+      message: "đã gửi cho bạn lời mời kết bạn.",
+    });
+
+    return {
+      multiple: false,
+      user: {
+        _id: users[0]._id,
+        displayName: users[0].displayName,
+        avatar: users[0].avatar,
+        phoneNumber: users[0].accountId?.phoneNumber || "",
+        email: users[0].accountId?.email || "",
+      },
+      request: newRequest,
+    };
+  }
+
+  /**
+   * Chấp nhận/từ chối lời mời kết bạn
+   */
+  async respondFriendRequest(userId, requestId, status) {
+    const request = await FriendRequest.findById(requestId);
+    if (!request) {
+      throw {
+        statusCode: 404,
+        message: "Lời mời không tồn tại",
+      };
+    }
+
+    if (request.receiverId.toString() !== userId) {
+      throw {
+        statusCode: 403,
+        message: "Bạn không có quyền xử lý lời mời này",
+      };
+    }
+
+    request.status = status;
+    await request.save();
+
+    if (status === FRIEND_REQUEST_STATUS.ACCEPTED) {
+      const senderId = request.senderId;
+
+      // Kiểm tra conversation đã tồn tại chưa
+      const existingConv = await Conversation.findOne({
+        type: CONVERSATION_TYPES.PRIVATE,
+        "members.userId": { $all: [userId, senderId] },
+      });
+
+      // Tạo conversation nếu chưa có
+      const conversationPromise = existingConv
+        ? Promise.resolve(existingConv)
+        : (async () => {
+            const senderUser =
+              await User.findById(senderId).select("displayName avatar");
+            return Conversation.create({
+              type: CONVERSATION_TYPES.PRIVATE,
+              name: senderUser.displayName,
+              groupAvatar: senderUser.avatar,
+              members: [
+                { userId, role: "member" },
+                { userId: senderId, role: "member" },
+              ],
+            });
+          })();
+
+      await Promise.all([
+        User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }),
+        User.findByIdAndUpdate(senderId, { $addToSet: { friends: userId } }),
+        Notification.create({
+          recipientId: senderId,
+          senderId: userId,
+          type: "system",
+          message: "đã chấp nhận lời mời kết bạn.",
+        }),
+        conversationPromise,
+      ]);
+    }
+
+    return { status };
+  }
+
+  /**
+   * Lấy danh sách lời mời kết bạn pending
+   */
+  async getPendingRequests(userId) {
+    const requests = await FriendRequest.find({
+      receiverId: userId,
+      status: FRIEND_REQUEST_STATUS.PENDING,
+    }).populate("senderId", "displayName avatar");
+
+    return {
+      requests: requests,
+      total: requests.length,
+    };
+  }
+
+  /**
+   * Chấp nhận lời mời kết bạn
+   */
+  async acceptFriendRequest(userId, requestId) {
+    const request = await FriendRequest.findById(requestId);
+    if (!request) {
+      throw {
+        statusCode: 404,
+        message: "Lời mời không tồn tại",
+      };
+    }
+
+    if (request.receiverId.toString() !== userId) {
+      throw {
+        statusCode: 403,
+        message: "Không có quyền xử lý",
+      };
+    }
+
+    if (request.status === FRIEND_REQUEST_STATUS.ACCEPTED) {
+      throw {
+        statusCode: 400,
+        message: "Lời mời đã được chấp nhận",
+      };
+    }
+
+    request.status = FRIEND_REQUEST_STATUS.ACCEPTED;
+    await request.save();
+
+    const senderId = request.senderId;
+
+    await Promise.all([
+      User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }),
+      User.findByIdAndUpdate(senderId, { $addToSet: { friends: userId } }),
+      Notification.create({
+        recipientId: senderId,
+        senderId: userId,
+        type: "system",
+        message: "đã chấp nhận lời mời kết bạn.",
+      }),
+    ]);
+
+    return { success: true };
+  }
+
+  /**
+   * Từ chối lời mời kết bạn
+   */
+  async rejectFriendRequest(userId, requestId) {
+    const request = await FriendRequest.findById(requestId);
+    if (!request) {
+      throw {
+        statusCode: 404,
+        message: "Lời mời không tồn tại",
+      };
+    }
+
+    if (request.receiverId.toString() !== userId) {
+      throw {
+        statusCode: 403,
+        message: "Bạn không có quyền xử lý lời mời này",
+      };
+    }
+
+    request.status = FRIEND_REQUEST_STATUS.REJECTED;
+    await request.save();
+
+    return { success: true };
+  }
+
+  /**
+   * Xóa bạn bè
+   */
+  async removeFriend(userId, friendId) {
+    if (userId === friendId) {
+      throw {
+        statusCode: 400,
+        message: "Không thể xóa chính mình",
+      };
+    }
+
+    // Xóa quan hệ bạn bè
+    await Promise.all([
+      User.findByIdAndUpdate(userId, { $pull: { friends: friendId } }),
+      User.findByIdAndUpdate(friendId, { $pull: { friends: userId } }),
+      FriendRequest.deleteMany({
+        $or: [
+          { senderId: userId, receiverId: friendId },
+          { senderId: friendId, receiverId: userId },
+        ],
+      }),
+    ]);
+
+    // Tìm và xóa cuộc trò chuyện riêng tư
+    const privateConversations = await Conversation.find({
+      type: CONVERSATION_TYPES.PRIVATE,
+      "members.userId": { $all: [userId, friendId] },
+    }).select("_id");
+
+    if (privateConversations.length > 0) {
+      const convIds = privateConversations.map((c) => c._id);
+      await Promise.all([
+        Message.deleteMany({ conversationId: { $in: convIds } }),
+        Conversation.deleteMany({ _id: { $in: convIds } }),
+      ]);
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Lấy email và số điện thoại của user hiện tại
+   */
+  async getUserEmail(userId) {
+    const user = await User.findById(userId)
+      .populate("accountId", "email phoneNumber")
+      .select("accountId displayName");
+
+    if (!user) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    if (!user.accountId) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy thông tin tài khoản",
+      };
+    }
+
+    return {
+      email: user.accountId.email || "",
+      phoneNumber: user.accountId.phoneNumber || "",
+      displayName: user.displayName,
+    };
+  }
+
+  /**
+   * Lấy email của user theo ID
+   */
+  async getUserEmailById(userId) {
+    const user = await User.findById(userId)
+      .populate("accountId", "email phoneNumber")
+      .select("accountId displayName avatar");
+
+    if (!user) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    if (!user.accountId) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy thông tin tài khoản",
+      };
+    }
+
+    return {
+      _id: user._id,
+      displayName: user.displayName,
+      avatar: user.avatar,
+      email: user.accountId.email || "",
+      phoneNumber: user.accountId.phoneNumber || "",
+    };
+  }
+}
+
+module.exports = new UserService();
