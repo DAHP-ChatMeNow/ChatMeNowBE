@@ -6,6 +6,9 @@ const cloudinary = require("../../config/cloudinary");
 const storage = multer.memoryStorage();
 
 const multerUploads = multer({ storage }).single("image");
+const multerMultipleUploads = multer({ storage }).array("media", 10);
+const multerAvatarUpload = multer({ storage }).single("image");
+const multerCoverUpload = multer({ storage }).single("image");
 
 const parser = new DatauriParser();
 
@@ -25,6 +28,9 @@ const uploadToCloudinary = (fileDataUri) => {
 
 module.exports = {
   multerUploads,
+  multerMultipleUploads,
+  multerAvatarUpload,
+  multerCoverUpload,
   formatBufferToDataURI,
   uploadToCloudinary,
 };

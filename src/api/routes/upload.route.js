@@ -1,17 +1,28 @@
 const express = require("express");
 const router = express.Router();
-const { authMiddleware } = require("../middleware/authMiddleware");
-const { multerUploads } = require("../middleware/storage");
+const { verifyToken } = require("../middleware/authMiddleware");
+const {
+  multerAvatarUpload,
+  multerCoverUpload,
+} = require("../middleware/storage");
 const {
   uploadAvatar,
   uploadPhoto,
   deletePhoto,
+  uploadGroupAvatar,
 } = require("../controllers/upload.controller");
 
-router.post("/avatar", authMiddleware, multerUploads, uploadAvatar);
+router.post("/avatar", verifyToken, multerAvatarUpload, uploadAvatar);
 
-router.post("/photo", authMiddleware, multerUploads, uploadPhoto);
+router.post("/cover", verifyToken, multerCoverUpload, uploadPhoto);
 
-router.delete("/photo", authMiddleware, deletePhoto);
+router.post(
+  "/group/:conversationId",
+  verifyToken,
+  multerAvatarUpload,
+  uploadGroupAvatar,
+);
+
+router.delete("/photo", verifyToken, deletePhoto);
 
 module.exports = router;
