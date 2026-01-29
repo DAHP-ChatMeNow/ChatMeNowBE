@@ -2,8 +2,9 @@ const express = require("express");
 const router = express.Router();
 const postController = require("../controllers/post.controller");
 const { verifyToken } = require("../middleware/authMiddleware");
+const { multerMultipleUploads } = require("../middleware/storage");
 
-router.post("/", verifyToken, postController.createPost);
+router.post("/", verifyToken, multerMultipleUploads, postController.createPost);
 
 router.get("/feed", verifyToken, postController.getNewsFeed);
 

@@ -1,4 +1,8 @@
 const postService = require("../service/post.service");
+const {
+  formatBufferToDataURI,
+  uploadToCloudinary,
+} = require("../middleware/storage");
 
 exports.getNewsFeed = async (req, res) => {
   try {
@@ -22,7 +26,25 @@ exports.getNewsFeed = async (req, res) => {
 exports.createPost = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const populatedPost = await postService.createPost(userId, req.body);
+    const { content, privacy } = req.body;
+
+    const media = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const fileDataUri = formatBufferToDataURI(file);
+        const uploadResult = await uploadToCloudinary(fileDataUri.content);
+        media.push({
+          url: uploadResult.secure_url,
+          type: "image",
+        });
+      }
+    }
+
+    const populatedPost = await postService.createPost(userId, {
+      content,
+      privacy,
+      media,
+    });
 
     res.status(201).json(populatedPost);
   } catch (error) {

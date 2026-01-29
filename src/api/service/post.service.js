@@ -31,11 +31,12 @@ class PostService {
   /**
    * Tạo bài viết mới
    */
-  async createPost(userId, { content, privacy }) {
+  async createPost(userId, { content, privacy, media = [] }) {
     const newPost = await Post.create({
       authorId: userId,
       content,
       privacy,
+      media,
     });
 
     const populatedPost = await newPost.populate(
