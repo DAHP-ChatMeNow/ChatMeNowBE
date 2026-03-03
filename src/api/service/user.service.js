@@ -10,9 +10,6 @@ const {
 } = require("../../constants");
 
 class UserService {
-  /**
-   * Tìm kiếm người dùng
-   */
   async searchUsers(keyword, currentUserId) {
     if (!keyword) {
       throw {
@@ -31,7 +28,6 @@ class UserService {
 
     const accountIds = accountsByContact.map((acc) => acc._id);
 
-    // Tìm user
     const users = await User.find({
       $or: [
         { displayName: { $regex: keyword, $options: "i" } },
@@ -43,10 +39,8 @@ class UserService {
       .select("displayName avatar bio accountId")
       .limit(20);
 
-    // Lấy currentUser
     const currentUser = await User.findById(currentUserId).select("friends");
 
-    // Gắn trạng thái bạn bè
     const usersWithFriendStatus = await Promise.all(
       users.map(async (user) => {
         const isFriend = currentUser.friends.includes(user._id);
@@ -86,12 +80,9 @@ class UserService {
     };
   }
 
-  /**
-   * Lấy thông tin profile của user
-   */
   async getUserProfile(userId) {
     // Validate ObjectId format
-    if (!userId || !userId.match(/^[0-9a-fA-F]{24}$/)) {
+    if (!userId) {
       throw {
         statusCode: 400,
         message: "User ID không hợp lệ",
@@ -154,9 +145,6 @@ class UserService {
     return updatedUser;
   }
 
-  /**
-   * Cập nhật avatar
-   */
   async updateAvatar(userId, avatar) {
     if (!avatar) {
       throw {
@@ -169,7 +157,9 @@ class UserService {
       userId,
       { avatar },
       { new: true, runValidators: true },
-    ).select("-__v");
+    )
+      .select("-__v")
+      .populate("friends", "_id");
 
     if (!updatedUser) {
       throw {
@@ -179,6 +169,32 @@ class UserService {
     }
 
     return updatedUser;
+  }
+
+  /**
+   * Lấy avatar URL của user
+   */
+  async getUserAvatar(userId) {
+    if (!userId || !userId.match(/^[0-9a-fA-F]{24}$/)) {
+      throw {
+        statusCode: 400,
+        message: "User ID không hợp lệ",
+      };
+    }
+
+    const user = await User.findById(userId).select("avatar displayName");
+
+    if (!user) {
+      throw {
+        statusCode: 404,
+        message: "Không tìm thấy người dùng",
+      };
+    }
+
+    return {
+      avatar: user.avatar || null,
+      displayName: user.displayName,
+    };
   }
 
   /**
@@ -259,29 +275,57 @@ class UserService {
       };
     }
 
-    // Kiểm tra lời mời pending
+    // Kiểm tra lời mời đã tồn tại (bất kỳ status nào)
     const existingRequest = await FriendRequest.findOne({
       $or: [
-        { senderId, receiverId, status: "pending" },
-        { senderId: receiverId, receiverId: senderId, status: "pending" },
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
       ],
     });
 
     if (existingRequest) {
-      if (existingRequest.senderId.toString() === senderId) {
-        throw {
-          statusCode: 400,
-          message: "Đã gửi lời mời trước đó",
-        };
-      } else {
+      // Nếu người kia đã gửi lời mời cho mình (pending)
+      if (
+        existingRequest.senderId.toString() === receiverId &&
+        existingRequest.status === FRIEND_REQUEST_STATUS.PENDING
+      ) {
         throw {
           statusCode: 400,
           message: "Người này đã gửi lời mời kết bạn cho bạn",
         };
       }
+
+      // Nếu mình đã gửi và đang pending
+      if (
+        existingRequest.senderId.toString() === senderId &&
+        existingRequest.status === FRIEND_REQUEST_STATUS.PENDING
+      ) {
+        throw {
+          statusCode: 400,
+          message: "Đã gửi lời mời trước đó",
+        };
+      }
+
+      // Nếu đã bị rejected hoặc expired, update lại thành pending
+      if (existingRequest.senderId.toString() === senderId) {
+        existingRequest.status = FRIEND_REQUEST_STATUS.PENDING;
+        existingRequest.createdAt = new Date();
+        await existingRequest.save();
+
+        // Tạo thông báo
+        await Notification.create({
+          recipientId: receiverId,
+          senderId: senderId,
+          type: "friend_request",
+          referenced: existingRequest._id,
+          message: "đã gửi cho bạn lời mời kết bạn.",
+        });
+
+        return existingRequest;
+      }
     }
 
-    // Tạo lời mời
+    // Tạo lời mời mới
     const newRequest = await FriendRequest.create({ senderId, receiverId });
 
     // Tạo thông báo
@@ -394,26 +438,20 @@ class UserService {
       };
     }
 
-    // Kiểm tra lời mời pending
+    // Kiểm tra lời mời đã tồn tại
     const existingRequest = await FriendRequest.findOne({
       $or: [
-        { senderId, receiverId, status: "pending" },
-        { senderId: receiverId, receiverId: senderId, status: "pending" },
+        { senderId, receiverId },
+        { senderId: receiverId, receiverId: senderId },
       ],
     });
 
     if (existingRequest) {
-      if (existingRequest.senderId.toString() === senderId) {
-        throw {
-          statusCode: 400,
-          message: "Đã gửi lời mời cho người này trước đó",
-          user: {
-            _id: users[0]._id,
-            displayName: users[0].displayName,
-            avatar: users[0].avatar,
-          },
-        };
-      } else {
+      // Nếu người kia đã gửi lời mời cho mình (pending)
+      if (
+        existingRequest.senderId.toString() === receiverId &&
+        existingRequest.status === FRIEND_REQUEST_STATUS.PENDING
+      ) {
         throw {
           statusCode: 400,
           message:
@@ -425,9 +463,53 @@ class UserService {
           },
         };
       }
+
+      // Nếu mình đã gửi và đang pending
+      if (
+        existingRequest.senderId.toString() === senderId &&
+        existingRequest.status === FRIEND_REQUEST_STATUS.PENDING
+      ) {
+        throw {
+          statusCode: 400,
+          message: "Đã gửi lời mời cho người này trước đó",
+          user: {
+            _id: users[0]._id,
+            displayName: users[0].displayName,
+            avatar: users[0].avatar,
+          },
+        };
+      }
+
+      // Nếu đã bị rejected, update lại thành pending
+      if (existingRequest.senderId.toString() === senderId) {
+        existingRequest.status = FRIEND_REQUEST_STATUS.PENDING;
+        existingRequest.createdAt = new Date();
+        await existingRequest.save();
+
+        // Tạo thông báo
+        await Notification.create({
+          recipientId: receiverId,
+          senderId: senderId,
+          type: "friend_request",
+          referenced: existingRequest._id,
+          message: "đã gửi cho bạn lời mời kết bạn.",
+        });
+
+        return {
+          multiple: false,
+          user: {
+            _id: users[0]._id,
+            displayName: users[0].displayName,
+            avatar: users[0].avatar,
+            phoneNumber: users[0].accountId?.phoneNumber || "",
+            email: users[0].accountId?.email || "",
+          },
+          request: existingRequest,
+        };
+      }
     }
 
-    // Tạo lời mời
+    // Tạo lời mời mới
     const newRequest = await FriendRequest.create({ senderId, receiverId });
 
     // Tạo thông báo
@@ -562,7 +644,10 @@ class UserService {
 
     const senderId = request.senderId;
 
-    await Promise.all([
+    // Lấy thông tin của cả 2 users
+    const [sender, receiver] = await Promise.all([
+      User.findById(senderId).select("displayName avatar bio isOnline"),
+      User.findById(userId).select("displayName avatar bio isOnline"),
       User.findByIdAndUpdate(userId, { $addToSet: { friends: senderId } }),
       User.findByIdAndUpdate(senderId, { $addToSet: { friends: userId } }),
       Notification.create({
@@ -573,7 +658,12 @@ class UserService {
       }),
     ]);
 
-    return { success: true };
+    return {
+      success: true,
+      senderId: senderId,
+      senderInfo: sender,
+      receiverInfo: receiver,
+    };
   }
 
   /**
@@ -595,10 +685,11 @@ class UserService {
       };
     }
 
+    const senderId = request.senderId;
     request.status = FRIEND_REQUEST_STATUS.REJECTED;
     await request.save();
 
-    return { success: true };
+    return { success: true, senderId: senderId };
   }
 
   /**

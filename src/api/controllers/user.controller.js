@@ -68,6 +68,18 @@ exports.updateAvatar = async (req, res) => {
       req.body.avatar,
     );
 
+    // ✅ Emit socket event để notify friends về avatar mới
+    const io = req.app.get("io");
+    const friends = updatedUser.friends || [];
+
+    friends.forEach((friendId) => {
+      io.to(friendId.toString()).emit("friend_avatar_updated", {
+        userId: req.user.userId,
+        avatar: updatedUser.avatar,
+        displayName: updatedUser.displayName,
+      });
+    });
+
     res.status(200).json({
       success: true,
       message: "Cập nhật avatar thành công",
@@ -124,15 +136,24 @@ exports.sendFriendRequest = async (req, res) => {
     const senderId = req.user.userId;
     const receiverId = req.params.userId || req.body.receiverId;
 
-    const newRequest = await userService.sendFriendRequest(
-      senderId,
-      receiverId,
-    );
+    const result = await userService.sendFriendRequest(senderId, receiverId);
+
+    // ✅ Emit socket event real-time đến người nhận
+    const io = req.app.get("io");
+    io.to(receiverId.toString()).emit("friend_request_received", {
+      requestId: result._id,
+      sender: {
+        _id: req.user.userId,
+        displayName: req.user.displayName,
+        avatar: req.user.avatar,
+      },
+      createdAt: result.createdAt,
+    });
 
     res.status(201).json({
       success: true,
       message: "Đã gửi lời mời kết bạn",
-      request: newRequest,
+      request: result,
     });
   } catch (error) {
     if (error.statusCode) {
@@ -159,6 +180,18 @@ exports.searchAndAddFriend = async (req, res) => {
         total: result.total,
       });
     }
+
+    // ✅ Emit socket event real-time đến người nhận
+    const io = req.app.get("io");
+    io.to(result.user._id.toString()).emit("friend_request_received", {
+      requestId: result.request._id,
+      sender: {
+        _id: req.user.userId,
+        displayName: req.user.displayName,
+        avatar: req.user.avatar,
+      },
+      createdAt: result.request.createdAt,
+    });
 
     res.status(201).json({
       success: true,
@@ -215,9 +248,31 @@ exports.acceptFriendRequest = async (req, res) => {
     const userId = req.user.userId;
     const { requestId } = req.params;
 
-    await userService.acceptFriendRequest(userId, requestId);
+    const result = await userService.acceptFriendRequest(userId, requestId);
 
-    res.json({ success: true });
+    // ✅ Emit socket events real-time cho cả 2 users
+    const io = req.app.get("io");
+
+    // Thông báo cho người gửi lời mời
+    io.to(result.senderId.toString()).emit("friend_request_accepted", {
+      acceptedBy: {
+        _id: userId,
+        displayName: req.user.displayName,
+        avatar: req.user.avatar,
+      },
+      requestId: requestId,
+    });
+
+    // Cập nhật danh sách bạn bè cho cả 2 users
+    io.to(userId).emit("friend_list_updated", {
+      newFriend: result.senderInfo,
+    });
+
+    io.to(result.senderId.toString()).emit("friend_list_updated", {
+      newFriend: result.receiverInfo,
+    });
+
+    res.json({ success: true, friend: result.senderInfo });
   } catch (error) {
     if (error.statusCode) {
       return res.status(error.statusCode).json({ message: error.message });
@@ -231,7 +286,23 @@ exports.rejectFriendRequest = async (req, res) => {
     const userId = req.user.userId;
     const { requestId } = req.params;
 
-    await userService.rejectFriendRequest(userId, requestId);
+    const result = await userService.rejectFriendRequest(userId, requestId);
+
+    const io = req.app.get("io");
+
+    // ✅ Emit socket event đến người gửi lời mời
+    io.to(result.senderId.toString()).emit("friend_request_rejected", {
+      rejectedBy: {
+        _id: userId,
+        displayName: req.user.displayName,
+      },
+      requestId: requestId,
+    });
+
+    // ✅ Emit socket event đến chính người từ chối để xóa request khỏi danh sách
+    io.to(userId.toString()).emit("friend_request_removed", {
+      requestId: requestId,
+    });
 
     res
       .status(200)
@@ -251,6 +322,17 @@ exports.removeFriend = async (req, res) => {
 
     await userService.removeFriend(userId, friendId);
 
+    // ✅ Emit socket event cho cả 2 users
+    const io = req.app.get("io");
+
+    io.to(userId).emit("friend_removed", {
+      removedFriendId: friendId,
+    });
+
+    io.to(friendId).emit("friend_removed", {
+      removedFriendId: userId,
+    });
+
     res
       .status(200)
       .json({ success: true, message: "Đã xóa bạn bè và hội thoại riêng tư" });
@@ -259,6 +341,25 @@ exports.removeFriend = async (req, res) => {
       return res.status(error.statusCode).json({ message: error.message });
     }
     res.status(500).json({ message: error.message });
+  }
+};
+
+// Lấy avatar URL của user
+exports.getUserAvatar = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const result = await userService.getUserAvatar(userId);
+
+    res.status(200).json({
+      success: true,
+      avatar: result.avatar,
+      displayName: result.displayName,
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    res.status(500).json({ message: "Lỗi server: " + error.message });
   }
 };
 
